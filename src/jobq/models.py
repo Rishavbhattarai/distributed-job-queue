@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -31,9 +32,20 @@ class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    # Kept for compatibility with clients that check for it; no code path writes it.
+    # A job that runs out of attempts (or hits a permanent error) goes to DEAD.
     FAILED = "failed"
-    # Reserved for the dead-letter queue (not used by the Week 1 code path).
+    # In the dead-letter queue. Inspect with GET /dlq, replay with POST /dlq/{id}/replay.
     DEAD = "dead"
+
+
+class AttemptOutcome(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    # The worker stopped heartbeating (crashed or stalled) and the reaper reclaimed the job.
+    LEASE_EXPIRED = "lease_expired"
+    # The worker released the job during graceful shutdown.
+    RELEASED = "released"
 
 
 TERMINAL_STATUSES = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.DEAD})
@@ -93,6 +105,34 @@ class JobAttempt(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # NULL while running; 'succeeded' | 'failed' (later also e.g. 'lease_expired').
+    # NULL while running, then one of AttemptOutcome.
     outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Schedule(Base):
+    """A cron-style recurring job. The reaper process enqueues one job per tick."""
+
+    __tablename__ = "schedules"
+    __table_args__ = (
+        CheckConstraint("priority BETWEEN 0 AND 2", name="ck_schedules_priority"),
+        Index("ix_schedules_due", "enabled", "next_run_at"),
+    )
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    cron: Mapped[str] = mapped_column(Text, nullable=False)
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    priority: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

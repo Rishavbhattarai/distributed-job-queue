@@ -14,7 +14,7 @@ def test_job_create_defaults() -> None:
     jc = JobCreate(type="sleep")
     assert jc.priority == "normal"
     assert jc.payload == {}
-    assert jc.max_attempts == 3
+    assert jc.max_attempts is None  # resolved per type by the API
     assert jc.run_at is None
 
 
@@ -57,3 +57,18 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.handler_modules == ("a.b", "c.d")
     assert s.worker_id == "w-1"
     assert s.poll_timeout == 0.5
+
+
+def test_settings_type_map_and_lease_derived_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOBQ_MAX_ATTEMPTS_BY_TYPE", "send_invoice=10, sync=5")
+    monkeypatch.setenv("JOBQ_LEASE_SECONDS", "9")
+    s = Settings.from_env()
+    assert s.max_attempts_for("send_invoice") == 10
+    assert s.max_attempts_for("other") == 3
+    assert s.heartbeat_interval == 3.0
+
+
+def test_settings_rejects_bad_type_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOBQ_MAX_ATTEMPTS_BY_TYPE", "oops")
+    with pytest.raises(ValueError):
+        Settings.from_env()

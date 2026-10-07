@@ -72,11 +72,11 @@ again (at-least-once). We pick at-least-once and make the second run harmless.
 - Two stores to keep consistent. There is a window where a job is committed but not yet
   dispatchable. The reconciler is what closes it.
 - Handler authors must write idempotent handlers. We document this in the handler API.
-- Week 1 dispatch uses plain `BLPOP`, so a crash mid-job strands that job as `running`
-  until leases and the reaper exist (Week 2). That gap is known and tracked.
+- Week 1 dispatch used plain `BLPOP`, so a crash mid-job stranded the job as `running`.
+  [ADR 0002](0002-leases-heartbeats-and-fencing.md) replaced it with leases and a reaper.
 
 ## Revisit when
 
 - Throughput needs exceed what one Redis primary can serve.
 - We benchmark option B (`SKIP LOCKED`). If it's close enough, dropping Redis removes the
-  dual-write problem entirely. That benchmark is a stretch goal with its own ADR.
+  dual-write problem entirely. That benchmark is a stretch goal.

@@ -1,11 +1,18 @@
-# One-command local stack: `docker compose up --build`
-#   API:  http://localhost:8000  (OpenAPI docs at /docs)
-# Scale workers later with: docker compose up --scale worker=4
+# One-command local stack: `docker compose up -d --build`
+#   API         http://localhost:${JOBQ_API_PORT:-8000}   (OpenAPI docs at /docs)
+#   Grafana     http://localhost:${JOBQ_GRAFANA_PORT:-3000}  (dashboard "jobq", no login)
+#   Prometheus  http://localhost:${JOBQ_PROMETHEUS_PORT:-9090}
+# Scale workers with: docker compose up -d --scale worker=4
+# Host ports are configurable so the stack can run next to other projects.
+
+name: jobq
 
 x-jobq-env: &jobq-env
   JOBQ_DATABASE_URL: postgresql+asyncpg://jobq:jobq@postgres:5432/jobq
   JOBQ_REDIS_URL: redis://redis:6379/0
-  JOBQ_LOG_LEVEL: INFO
+  JOBQ_LOG_LEVEL: ${JOBQ_LOG_LEVEL:-INFO}
+  JOBQ_LEASE_SECONDS: ${JOBQ_LEASE_SECONDS:-30}
+  JOBQ_MAX_QUEUE_DEPTH: ${JOBQ_MAX_QUEUE_DEPTH:-50000}
 
 services:
   postgres:
@@ -14,7 +21,7 @@ services:
       POSTGRES_USER: jobq
       POSTGRES_PASSWORD: jobq
       POSTGRES_DB: jobq
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:${JOBQ_POSTGRES_PORT:-5432}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jobq -d jobq"]
@@ -24,9 +31,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    # AOF on so a Redis restart keeps queued ids (Postgres is still the source of truth).
+    # AOF on so a Redis restart keeps queued ids (Postgres is still the source of truth,
+    # and the reconciler re-pushes anything Redis loses).
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:${JOBQ_REDIS_PORT:-6379}:6379"]
     volumes: [redisdata:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -45,9 +53,20 @@ services:
 
   api:
     image: jobq:dev
-    command: ["uvicorn", "jobq.api:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment: *jobq-env
-    ports: ["8000:8000"]
+    # Several uvicorn processes (one is CPU-bound around 1,300 enqueues/s on our hardware).
+    # Prometheus multiprocess mode aggregates their counters on /metrics.
+    command:
+      - sh
+      - -c
+      - >-
+        rm -rf "$$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$$PROMETHEUS_MULTIPROC_DIR" &&
+        exec uvicorn jobq.api:app --host 0.0.0.0 --port 8000 --no-access-log
+        --workers "$${JOBQ_API_PROCESSES:-4}"
+    environment:
+      <<: *jobq-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/jobq-prometheus
+      JOBQ_API_PROCESSES: ${JOBQ_API_PROCESSES:-4}
+    ports: ["127.0.0.1:${JOBQ_API_PORT:-8000}:8000"]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -62,20 +81,48 @@ services:
     command: ["jobq-worker"]
     environment:
       <<: *jobq-env
+      JOBQ_METRICS_PORT: "9100"
+      JOBQ_SHUTDOWN_GRACE: "25"
       # JOBQ_HANDLER_MODULES: "billing.jobs"   # extra handler modules (e.g. Project 3)
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
     stop_grace_period: 30s
+    restart: unless-stopped
 
-  # TODO(week 4): Prometheus + Grafana (dashboards committed as JSON).
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   volumes: ["./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
-  #   ports: ["9090:9090"]
-  # grafana:
-  #   image: grafana/grafana-oss:latest
-  #   ports: ["3000:3000"]
+  reaper:
+    image: jobq:dev
+    command: ["jobq-reaper"]
+    environment:
+      <<: *jobq-env
+      JOBQ_METRICS_PORT: "9101"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes: ["./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["127.0.0.1:${JOBQ_PROMETHEUS_PORT:-9090}:9090"]
+    depends_on: [api]
+
+  grafana:
+    image: grafana/grafana-oss:12.1.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/jobq.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:${JOBQ_GRAFANA_PORT:-3000}:3000"]
+    depends_on: [prometheus]
 
 volumes:
   pgdata:

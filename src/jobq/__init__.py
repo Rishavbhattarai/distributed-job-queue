@@ -7,6 +7,7 @@ from jobq.client import (
     JobqClient,
     JobqError,
     JobqHTTPError,
+    QueueFullError,
     enqueue,
     get,
     wait,
@@ -19,8 +20,9 @@ __all__ = [
     "JobqClient",
     "JobqError",
     "JobqHTTPError",
+    "QueueFullError",
     "enqueue",
     "get",
     "wait",
 ]
-__version__ = "0.1.0"
+__version__ = "1.0.0"

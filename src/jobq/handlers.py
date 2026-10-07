@@ -1,7 +1,8 @@
 """Handler registry plus a few demo handlers.
 
 A handler is ``async def fn(payload: dict) -> JSON-serialisable result``. Raising any
-exception marks the attempt as failed.
+exception fails the attempt; the job is retried with backoff until ``max_attempts``, then
+moved to the dead-letter queue. Raise ``PermanentError`` to skip the remaining retries.
 
 Other code (e.g. Project 3) registers its own handlers with ``@registry.handler("name")``
 in a module listed in ``JOBQ_HANDLER_MODULES``; the worker imports those at startup.
@@ -19,8 +20,12 @@ from typing import Any
 Handler = Callable[[dict[str, Any]], Awaitable[Any]]
 
 
+class PermanentError(Exception):
+    """Raise from a handler when retrying cannot help (bad input, 4xx from a dependency)."""
+
+
 class UnknownJobTypeError(LookupError):
-    pass
+    """No handler for this job type in this worker. Treated as permanent (dead-lettered)."""
 
 
 class HandlerRegistry:

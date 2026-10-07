@@ -1,6 +1,6 @@
 [project]
 name = "jobq"
-version = "0.1.0"
+version = "1.0.0"
 description = "Distributed job processing system: Redis broker, Postgres source of truth, at-least-once + idempotency."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,8 @@ server = [
     "redis>=5.0",
     "structlog>=24.1",
     "pydantic>=2.7",
+    "croniter>=2.0",
+    "prometheus-client>=0.20",
 ]
 dev = [
     "jobq[server]",
@@ -28,11 +30,13 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
-    "testcontainers[postgres,redis]>=4.8",
+    "testcontainers[postgres,redis]>=4.15",
+    "types-croniter",
 ]
 
 [project.scripts]
 jobq-worker = "jobq.worker:main"
+jobq-reaper = "jobq.reaper:main"
 
 [build-system]
 requires = ["hatchling"]

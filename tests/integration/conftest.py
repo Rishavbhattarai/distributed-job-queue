@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,12 +21,14 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from jobq.api import create_app
 from jobq.broker import Broker
 from jobq.config import Settings
 from jobq.db import make_engine, make_session_factory
+from jobq.reaper import Reaper, open_reaper
 from jobq.worker import Worker, open_worker
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,8 +60,8 @@ def infra() -> Iterator[Infra]:
         docker.from_env().ping()
     except Exception as exc:
         pytest.skip(f"no JOBQ_TEST_* env vars and Docker unavailable: {exc}")
-    from testcontainers.postgres import PostgresContainer
-    from testcontainers.redis import RedisContainer
+    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.community.redis import RedisContainer
 
     with (
         PostgresContainer("postgres:16-alpine", driver="asyncpg") as pg,
@@ -86,12 +89,21 @@ def settings(migrated: Infra) -> Settings:
         redis_prefix=f"jobqtest-{uuid.uuid4().hex[:8]}",
         worker_id="test-worker",
         poll_timeout=0.5,
+        idle_sleep=0.01,
+        lease_seconds=5.0,
+        heartbeat_interval=1.0,
+        backoff_base=0.01,
+        backoff_cap=0.05,
+        reconcile_grace=0.0,
     )
 
 
 @pytest.fixture
 async def engine(settings: Settings) -> AsyncIterator[AsyncEngine]:
     eng = make_engine(settings.database_url)
+    # Each test starts with empty tables: the reconciler and DLQ look at every row.
+    async with eng.begin() as conn:
+        await conn.execute(text("TRUNCATE jobs, job_attempts, schedules CASCADE"))
     yield eng
     await eng.dispose()
 
@@ -114,6 +126,12 @@ async def worker(settings: Settings) -> AsyncIterator[Worker]:
         yield w
 
 
+@pytest.fixture
+async def reaper(settings: Settings) -> AsyncIterator[Reaper]:
+    async with open_reaper(settings) as r:
+        yield r
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -121,9 +139,9 @@ def _free_port() -> int:
         return port
 
 
-@pytest.fixture
-def api_url(settings: Settings) -> Iterator[str]:
-    """Run the real API under uvicorn in a background thread."""
+@contextmanager
+def serve_api(settings: Settings) -> Iterator[str]:
+    """Run the real API under uvicorn in a background thread; yields its base URL."""
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning")
@@ -138,3 +156,14 @@ def api_url(settings: Settings) -> Iterator[str]:
     yield f"http://127.0.0.1:{port}"
     server.should_exit = True
     thread.join(timeout=10)
+
+
+@pytest.fixture
+def api_url(settings: Settings, engine: AsyncEngine) -> Iterator[str]:
+    with serve_api(settings) as url:
+        yield url
+
+
+@pytest.fixture(autouse=True)
+def _clean_tables(engine: AsyncEngine) -> None:
+    """Every integration test gets empty tables (via the engine fixture)."""

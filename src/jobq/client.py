@@ -32,6 +32,7 @@ __all__ = [
     "JobqError",
     "JobqHTTPError",
     "Priority",
+    "QueueFullError",
     "enqueue",
     "get",
     "wait",
@@ -59,13 +60,21 @@ class JobqHTTPError(JobqError):
         self.body = body
 
 
+class QueueFullError(JobqHTTPError):
+    """HTTP 429: the queue is over its depth limit (backpressure). Retry after a pause."""
+
+    def __init__(self, body: str, retry_after: float) -> None:
+        super().__init__(429, body)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class Job:
     id: uuid.UUID
     type: str
     payload: dict[str, Any]
     priority: Priority
-    status: str  # queued | running | succeeded | failed | dead
+    status: str  # queued | running | succeeded | dead (in the DLQ)
     attempts: int
     max_attempts: int
     run_at: datetime
@@ -120,6 +129,8 @@ def _build_request(
 def _parse(resp: httpx.Response, job_id: uuid.UUID | str | None = None) -> Job:
     if resp.status_code == 404 and job_id is not None:
         raise JobNotFoundError(job_id)
+    if resp.status_code == 429:
+        raise QueueFullError(resp.text, float(resp.headers.get("Retry-After", "1")))
     if resp.status_code >= 400:
         raise JobqHTTPError(resp.status_code, resp.text)
     return Job.from_json(resp.json())

@@ -171,3 +171,16 @@ def test_top_level_package_exports_client() -> None:
     assert jobq.enqueue is not None
     assert jobq.get is not None
     assert jobq.JobqClient is JobqClient
+
+
+def test_429_raises_queue_full_with_retry_after() -> None:
+    from jobq.client import QueueFullError
+
+    rec = Recorder([httpx.Response(429, json={"detail": "full"}, headers={"Retry-After": "2"})])
+    with (
+        JobqClient("http://jobq.test", transport=httpx.MockTransport(rec)) as c,
+        pytest.raises(QueueFullError) as ei,
+    ):
+        c.enqueue("sleep")
+    assert isinstance(ei.value, JobqHTTPError)
+    assert (ei.value.status_code, ei.value.retry_after) == (429, 2.0)
