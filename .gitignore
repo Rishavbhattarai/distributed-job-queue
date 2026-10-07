@@ -1,0 +1,41 @@
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Local tooling / AI assistant state ---
+.claude/
+.playwright-mcp/
+CLAUDE.local.md
+
+# --- Personal notes (not part of the project) ---
+YOUR_TURN.md
+
+# --- Env & secrets ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# --- Logs ---
+*.log
+
+# --- Test / coverage caches ---
+.hypothesis/
+.coverage
+htmlcov/
