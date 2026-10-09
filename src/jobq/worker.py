@@ -28,7 +28,6 @@ import traceback
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -222,10 +221,6 @@ class Worker:
 async def _wait(stop: asyncio.Event, seconds: float) -> None:
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(stop.wait(), timeout=seconds)
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _format_error(exc: BaseException) -> str:
