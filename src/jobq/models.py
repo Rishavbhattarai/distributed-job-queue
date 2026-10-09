@@ -48,8 +48,6 @@ class AttemptOutcome(StrEnum):
     RELEASED = "released"
 
 
-TERMINAL_STATUSES = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.DEAD})
-
 PriorityName = Literal["high", "normal", "low"]
 # Stored as smallint. Lower number = served first (like Unix nice values).
 PRIORITY_VALUES: dict[str, int] = {"high": 0, "normal": 1, "low": 2}

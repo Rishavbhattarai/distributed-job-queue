@@ -27,7 +27,7 @@ from starlette.types import ASGIApp
 from jobq import cron, lifecycle, metrics
 from jobq.broker import Broker
 from jobq.config import Settings
-from jobq.db import make_autocommit_session_factory, make_engine, make_session_factory
+from jobq.db import make_engine, make_session_factory
 from jobq.logs import configure_logging
 from jobq.models import PRIORITY_NAMES, PRIORITY_VALUES, Job, JobStatus, Schedule
 from jobq.schemas import JobCreate, JobList, JobOut, Replay, ScheduleIn, ScheduleOut
@@ -54,7 +54,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redis = Redis.from_url(s.redis_url)
         app.state.settings = s
         app.state.session_factory = make_session_factory(engine)
-        app.state.autocommit_factory = make_autocommit_session_factory(engine)
         app.state.redis = redis
         app.state.broker = Broker(redis, prefix=s.redis_prefix)
         try:
